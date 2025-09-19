@@ -3,7 +3,9 @@ from datetime import datetime
 import pickle, os, numpy as np
 from scipy.spatial.distance import cosine
 import pandas as pd
-from models import db, Attendance, Student
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from models import db, Attendance, Student, User
 from utils import get_address_osm
 
 # --- Init Flask ---
@@ -22,7 +24,8 @@ THRESHOLD = 0.5
 
 # --- Load students.csv ---
 def load_students_csv():
-    if Student.query.first(): return
+    if Student.query.first():
+        return
     df = pd.read_csv("students.csv")
     df.rename(columns={"ID":"student_id","Name":"name","Class":"class_name"}, inplace=True)
     for _, row in df.iterrows():
@@ -31,7 +34,38 @@ def load_students_csv():
     db.session.commit()
     print("Imported students.csv")
 
+# --- Load default users (optional) ---
+def load_users():
+    if User.query.first():
+        return
+    students = Student.query.all()
+    for s in students:
+        u = User(
+            username=s.name,
+            password_hash=generate_password_hash(s.student_id),  # mặc định mật khẩu = student_id
+            role="student",
+            student_id=s.student_id
+        )
+        db.session.add(u)
+    db.session.commit()
+    print("Imported users")
+
 # --- Routes ---
+@app.route('/login', methods=['POST'])
+def login():
+    username = request.form.get("username")
+    password = request.form.get("password")
+    
+    user = User.query.filter_by(username=username).first()
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify({"status":"failed", "message":"Sai tên đăng nhập hoặc mật khẩu"})
+    
+    return jsonify({
+        "status":"success",
+        "role": user.role,
+        "student_id": user.student_id if user.role=="student" else None
+    })
+
 @app.route('/checkin', methods=['POST'])
 def checkin():
     student_id = request.form.get("student_id")
@@ -93,6 +127,29 @@ def history():
         "address": r.address
     } for r in records])
 
+@app.route('/attendance/history_teacher', methods=['GET'])
+def history_teacher():
+    class_name = request.args.get("class")
+    subject = request.args.get("subject")
+    date = request.args.get("date")
+    q = db.session.query(Attendance, Student).join(Student, Attendance.student_id==Student.student_id)
+    if class_name: q = q.filter(Student.class_name==class_name)
+    if subject: q = q.filter(Attendance.subject==subject)
+    if date: q = q.filter(Attendance.date==date)
+    records = q.order_by(Attendance.date, Attendance.time).all()
+    return jsonify([{
+        "student_id": a.Attendance.student_id,
+        "name": a.Student.name,
+        "class": a.Student.class_name,
+        "subject": a.Attendance.subject,
+        "date": str(a.Attendance.date),
+        "time": str(a.Attendance.time),
+        "status": a.Attendance.status,
+        "latitude": a.Attendance.latitude,
+        "longitude": a.Attendance.longitude,
+        "address": a.Attendance.address
+    } for a in records])
+
 @app.route('/attendance/export_excel', methods=['GET'])
 def export_excel():
     class_name = request.args.get("class")
@@ -123,4 +180,5 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
         load_students_csv()
+        load_users()
     app.run(host='0.0.0.0', port=5000)
