@@ -66,12 +66,12 @@ def login():
 @app.route('/checkin', methods=['POST'])
 def checkin():
     student_id = request.form.get("student_id")
-    latitude = float(request.form.get("latitude",0))
-    longitude = float(request.form.get("longitude",0))
+    latitude = float(request.form.get("latitude", 0))
+    longitude = float(request.form.get("longitude", 0))
     embedding_bytes = request.files.get("embedding").read()
     embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
 
-    # So sánh embeddings
+    # So sánh embeddings (cosine distance: nhỏ -> giống)
     best_score, best_id = 1.0, None
     for sid, emb_template in embeddings_dict.items():
         templates = [emb_template] if not isinstance(emb_template, list) else emb_template
@@ -79,9 +79,12 @@ def checkin():
             score = cosine(embedding, te)
             if score < best_score:
                 best_score, best_id = score, sid
-    if best_score > THRESHOLD:
-        return jsonify({"status":"failed","message":"Khuôn mặt không hợp lệ", "address":""})
 
+    # Không khớp với ai
+    if best_id is None or best_score > THRESHOLD:
+        return jsonify({"status": "failed", "message": "Khuôn mặt không hợp lệ", "address": ""})
+
+    # Lưu điểm danh
     now = datetime.now()
     address = get_address_osm(latitude, longitude)
     att = Attendance(
@@ -95,14 +98,15 @@ def checkin():
     )
     db.session.add(att)
     db.session.commit()
-    return jsonify({
-        "status":"present",
-        "message":"Điểm danh thành công",
-        "date":str(now.date()),
-        "time":str(now.time()),
-        "address":address
-    })
 
+    return jsonify({
+        "status": "present",
+        "message": "Điểm danh thành công",
+        "date": str(now.date()),
+        "time": str(now.time()),
+        "address": address
+    })
+    
 @app.route('/attendance/history', methods=['GET'])
 def history():
     student_id = request.args.get("student_id")
